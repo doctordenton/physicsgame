@@ -7,7 +7,9 @@ public class Forces : MonoBehaviour
     public Controls myControls;
     [SerializeField] float moveSpeed;
     public Rigidbody myRb;
+    public Animator myAnimator;
     Vector3 startPosition;
+ 
     public Manager myManager;
     Quaternion startRotation;
     // Start is called once before the first execution of Update after the MonoBehaviour is created
@@ -15,6 +17,7 @@ public class Forces : MonoBehaviour
     {
         myControls = GetComponent<Controls>();
         myRb = GetComponent<Rigidbody>();
+        myAnimator = GetComponentInChildren<Animator>();
 
         startPosition = transform.position;
         startRotation = transform.rotation;
@@ -31,7 +34,9 @@ public class Forces : MonoBehaviour
 
     void FixedUpdate()
     {
-
+        Vector3 walkingSpeed = myRb.linearVelocity;
+        walkingSpeed.y = 0;
+        myAnimator.SetFloat("Speed", walkingSpeed.magnitude);
 
         if (myManager.CanWalk() == false)
         {

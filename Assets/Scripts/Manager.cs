@@ -1,7 +1,7 @@
 using TMPro;
 using UnityEngine;
 using UnityEngine.InputSystem;
-public enum GameState { Freeze, Feast, Fly, Return, Reset }
+public enum GameState { Freeze, Feast, Fly, Reset }
 public class Manager : MonoBehaviour
 
 {
@@ -13,20 +13,42 @@ public class Manager : MonoBehaviour
     public Player myPlayerFuel;
     float stateTimer;
     public float freezeTimerMax = 3f;
-    public float feastTimerMax = 5f;
-    public float returnTimerMax = 3f;
+    public float feastTimerMax = 10f;
 
     public TMP_Text fuelText;
     public TMP_Text stateText;
     public TMP_Text feastTimerText;
     public TMP_Text countdownText;
-    public LaunchPad launchPad;
+    public Rigidbody fallingFloor;
+    public GameObject feastWall;
+    public GameObject[] foodPilePrefabs;
+    GameObject currentPile;
+    [Tooltip("Piles to use for the first rounds, by number (1 = first pile in the list). After these run out, piles are random.")]
+    public int[] firstPiles = { 1, 4, 3 };
+    int roundsSpawned;
+    Vector3 floorStartPos;
+    Quaternion floorStartRot;
+    [Tooltip("Spin given to the floor when it drops, in radians per second (X = tip forward/back, Z = roll sideways).")]
+    public Vector3 floorSpin = new Vector3(0.15f, 0f, 0.6f);
+    [Tooltip("Downward speed the floor starts with when it drops (m/s), so the fall is obvious straight away.")]
+    public float floorDropSpeed = 4f;
+
+    // distance meter: how far along Z we get past the start line (the feast wall) each run
+    public TMP_Text distanceText;
+    public TMP_Text bestDistanceText;
+    float distance;        // this run
+    float bestDistance;    // best ever, saved between plays with PlayerPrefs
+
 
     void Start()
     {
-      
+
         state = GameState.Freeze;
         stateTimer = freezeTimerMax;
+        floorStartPos = fallingFloor.transform.position;
+        floorStartRot = fallingFloor.transform.rotation;
+        SpawnFood();
+        bestDistance = PlayerPrefs.GetFloat("bestDistance", 0f);   // load the saved best (0 if none yet)
     }
 
     // Update is called once per frame
@@ -65,31 +87,17 @@ public class Manager : MonoBehaviour
 
             if (stateTimer < 0)
             {
-                EnterReturn();
-                Debug.Log("return time");
-            }
-        }
-        if (state == GameState.Return)
-        {
-            stateTimer -= Time.deltaTime;
-
-            if (stateTimer < 0)
-            {
-                if (launchPad.playerInside == false)
-                {
-                    Sniped();
-                    Debug.Log("Sniped!");
-                }
-                else
-                {
-                    EnterFly();
-                    Debug.Log("Freebird!");
-                }
+                EnterFly();
+                Debug.Log("Freebird!");
             }
         }
 
         if (state == GameState.Fly)
         {
+            // how far past the start line we are; keep the furthest point reached this run
+            float now = Mathf.Abs(myPlayer.transform.position.z - feastWall.transform.position.z);
+            distance = Mathf.Max(distance, now);
+            if (distance > bestDistance) bestDistance = distance;
 
 
             /* if (stateTimer < 0)
@@ -108,11 +116,14 @@ public class Manager : MonoBehaviour
         fuelText.text = "fuel: " + myPlayerFuel.fuel.ToString("F1");
 
         feastTimerText.gameObject.SetActive(state == GameState.Feast);
-        feastTimerText.text = "time: " + Mathf.CeilToInt(stateTimer);
+        feastTimerText.text = Mathf.CeilToInt(stateTimer).ToString();
 
-        bool showCountdown = state == GameState.Freeze || state == GameState.Return;
+        bool showCountdown = state == GameState.Freeze;
         countdownText.gameObject.SetActive(showCountdown);
         countdownText.text = Mathf.CeilToInt(stateTimer).ToString();
+
+        if (distanceText) distanceText.text = "distance: " + Mathf.FloorToInt(distance) + " m";
+        if (bestDistanceText) bestDistanceText.text = "best: " + Mathf.FloorToInt(bestDistance) + " m";
     }
 
 
@@ -123,7 +134,31 @@ public class Manager : MonoBehaviour
         sniped = false;
         state = GameState.Freeze;
         stateTimer = freezeTimerMax;
+        myPlayer.myRb.linearDamping = 4f;
+        // stop the floor's fall and spin, then put it back flat where it started
+        if (!fallingFloor.isKinematic)
+        {
+            fallingFloor.linearVelocity = Vector3.zero;
+            fallingFloor.angularVelocity = Vector3.zero;
+        }
+        fallingFloor.isKinematic = true;
+        fallingFloor.transform.SetPositionAndRotation(floorStartPos, floorStartRot);
+        SpawnFood();
+        myPlayer.GetComponent<BoomerExplode>().Revive();
+        feastWall.SetActive(true);
+        distance = 0f;   // new run starts at 0
 
+    }
+
+    void SpawnFood()
+    {
+        if (currentPile != null) Destroy(currentPile);
+        // first rounds follow the set order (pile 1, 4, 3), then pick at random
+        int index = roundsSpawned < firstPiles.Length
+            ? firstPiles[roundsSpawned] - 1
+            : Random.Range(0, foodPilePrefabs.Length);
+        roundsSpawned++;
+        currentPile = Instantiate(foodPilePrefabs[Mathf.Clamp(index, 0, foodPilePrefabs.Length - 1)]);
     }
 
     public void EnterReset()
@@ -131,6 +166,10 @@ public class Manager : MonoBehaviour
         Debug.Log("reset state started");
         state = GameState.Reset;
         stateTimer = resetTimerMax;
+
+        // run's over: save the best distance to disk so it's still there next time we play
+        PlayerPrefs.SetFloat("bestDistance", bestDistance);
+        PlayerPrefs.Save();
     }
 
 
@@ -145,27 +184,35 @@ public class Manager : MonoBehaviour
         state = GameState.Feast;
         stateTimer = feastTimerMax;
     }
-    public void EnterReturn()
-    {
-        state = GameState.Return;
-        stateTimer = returnTimerMax;
-    }
 
     public void EnterFly()
     {
         state = GameState.Fly;
-       
+        fallingFloor.isKinematic = false;
+        fallingFloor.angularVelocity = floorSpin;   // start it tumbling so you can see it's falling
+        fallingFloor.linearVelocity = Vector3.down * floorDropSpeed;   // and give it a shove down so it drops right away
+        feastWall.SetActive(false);
+
+
+    }
+
+    // also save if the game is closed mid-run
+    void OnApplicationQuit()
+    {
+        PlayerPrefs.SetFloat("bestDistance", bestDistance);
+        PlayerPrefs.Save();
     }
 
     public bool CanWalk()
     {
-        return state == GameState.Feast || state == GameState.Return || state == GameState.Fly;
+        return state == GameState.Feast || state == GameState.Fly;
     }
 
     public bool CanFly()
     {
 
         return state == GameState.Fly;
+
     }
 }
 
